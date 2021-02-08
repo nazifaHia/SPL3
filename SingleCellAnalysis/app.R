@@ -1,6 +1,6 @@
 library(shiny)
 library(shinydashboard)
-
+library(igraph)
 library(scater)
 library(plotly)
 library(reshape2)
@@ -23,7 +23,7 @@ library(shinyWidgets)
 library(shinyjs)
 library(ggpubr)
 library(factoextra)
-
+library(scran)
 
 
 Sys.setenv(R_MAX_VSIZE = 16e9)
@@ -96,9 +96,15 @@ colData(cdScFiltAnnot)[,'Clust_Sample'] <- paste0(colData(cdScFiltAnnot)$Cluster
 colData(cdScFiltAnnot)[,'Clust_SampleWithClust'] <- paste0(colData(cdScFiltAnnot)$Sample,'_',colData(cdScFiltAnnot)$Clusters)
 
 
-kmeansSE<-assays(cdScFiltAnnot)$counts
+kmeansSE<-assays(cdScFiltAnnot)$logcounts
 SEK <- kmeans(kmeansSE,10)
 
+graphSNN10 <- buildSNNGraph(kmeansSE, k = 10)
+newGraph <- igraph::as_data_frame(graphSNN10, what="edges")
+
+graphToCL <- graph_from_data_frame(newGraph, directed = FALSE)
+
+LouvainGraph <- cluster_louvain(graphToCL)
 
 GeneNameSorted <- sort(rownames(logcounts(cdScFiltAnnot)))
 df = data.frame(Condition=colData(cdScFiltAnnot)$Sample)
@@ -140,7 +146,10 @@ ui <- dashboardPage(
                      menuSubItem('DE between sample & clusters', tabName = 'DE_between_sample_and_clusters'),
                      menuSubItem('DE between manual selection', tabName = 'DE_between_manual_selection')),
             menuItem('Cluster', tabName = 'Cluster', icon = icon('route'),
-                     menuSubItem('KMEANS', tabName = 'KMEANS'))
+                     menuSubItem('KMEANS', tabName = 'KMEANS'),
+                     menuSubItem('GraphBasedCluster', tabName = 'GraphBasedCluster'),
+                     menuSubItem('testCluster', tabName = 'testCluster')
+                     )
             
             
         )
@@ -770,10 +779,21 @@ ui <- dashboardPage(
                         title = "Kmeans", status = "primary", solidHeader = TRUE,
                         collapsible = TRUE, width = 12,
                         plotOutput("Cluster_KMEANS", width = "100%")%>% withSpinner(type = getOption("spinner.type", default = 8))             )
+            ),
+            tabItem(tabName = 'GraphBasedCluster',
+                    box(
+                        title = "GraphBasedCluster", status = "primary", solidHeader = TRUE,
+                        collapsible = TRUE, width = 12,
+                        plotlyOutput("GraphBasedCluster", width = "100%")%>% withSpinner(type = getOption("spinner.type", default = 8))             )
+            ),
+            tabItem(tabName = 'testCluster',
+                    box(
+                        title = "testing", status = "primary", solidHeader = TRUE,
+                        collapsible = TRUE, width = 12,
+                        plotlyOutput("testing", width = "100%")%>% withSpinner(type = getOption("spinner.type", default = 8))             )
             )
             
-            
-            
+ 
         )
     )
 )
@@ -2777,22 +2797,109 @@ server <- function(input, output, session) {
     
     
     
-    ###################################
+    ####################################
+    #
+    # KMEANS
+    #
+    ####################################
+    
     
     
     output$Cluster_KMEANS <- renderPlot({
-        
-        
+        #c("#2E9FDF", "#00AFBB", "#E7B800","#EE9FDD", "#DDAFB0", 
+         # "#AEB8E0","#2EDFDF", "#FFFABB", "#E7B80D", "#EDB80E" )
         factoextra::fviz_cluster(SEK, data = kmeansSE,
-                                 palette = c("#2E9FDF", "#00AFBB", "#E7B800","#EE9FDD", "#DDAFB0", 
-                                             "#AEB8E0","#2EDFDF", "#FFFABB", "#E7B80D", "#EDB80E" ), 
-                                 geom = "point",
-                                 ellipse.type = "convex", 
-                                 ggtheme = theme_bw()
+                                palette = c30[c(1,2,3,4,5,6,7,8,9,11)] , 
+                                geom = "point",
+                                ellipse.type = "convex", 
+                                ggtheme = theme_bw()
         )
+        
+        #df <- as.data.frame(SEK[["centers"]])
+        #df[,'Cell']=as.factor(colData(cdScFiltAnnot)$Barcode)
+        #df[,'Sample']=as.factor(colData(cdScFiltAnnot)$Sample)
+        #df[,'Clusters'] <- as.factor(SEK$cluster)
+        #df[,'cellType'] <- as.factor(colData(cdScFiltAnnot)$cellType)
+        #df %>%
+            #filter(Clusters %in% input$checkboxProjectionCluster) %>%
+            #filter(Sample %in% input$checkboxProjectionSample) %>%
+            #filter(cellType %in% input$checkboxProjectionCellType) %>%
+            #plot_ly(color = ~Clusters, colors = c_clust_col[c(1:9)], type="scatter", mode="markers", hoverinfo = 'text',
+                    #marker = list(size = input$plotOverviewDotSize, opacity = input$plotOverviewDotOpacity),
+                   # text = ~paste('</br> Cell: ', Cell,
+                               #   '</br> Clusters: ', Clusters,
+                               #   '</br> Samples: ', Sample,
+                                #  '</br> CellType: ', cellType)) %>% layout(legend= list(font=list(size=8))) %>%
+           # add_trace(x=~V1,y=~V2) %>%
+           # layout(title = 'tSNE with Kmeans',showlegend = TRUE, legend = list(font = list(size = 10), itemsizing='constant'))
+        
+    })
+    
+    ####################################
+    #
+    # Graph Based Clustering
+    #
+    ####################################
+    
+    output$GraphBasedCluster <- renderPlotly({
+      
+        #plot(LouvainGraph,graphToCL)
+
+            df <- as.data.frame(reducedDim(cdScFiltAnnot,'tSNE'))
+            #df <- as.data.frame(newGraph)
+            df[,'Cell']=as.factor(colData(cdScFiltAnnot)$Barcode)
+            df[,'Sample']=as.factor(colData(cdScFiltAnnot)$Sample)
+            df[,'Clusters'] <- as.factor(LouvainGraph$membership)
+            df[,'cellType'] <- as.factor(colData(cdScFiltAnnot)$cellType)
+            df %>%
+                #filter(Clusters %in% input$checkboxProjectionCluster) %>%
+                #filter(Sample %in% input$checkboxProjectionSample) %>%
+                #filter(cellType %in% input$checkboxProjectionCellType) %>%
+                plot_ly(color = ~Clusters, colors = c_clust_col[c(1:9)], type="scatter", mode="markers", hoverinfo = 'text',
+                        #marker = list(size = input$plotOverviewDotSize, opacity = input$plotOverviewDotOpacity),
+                        text = ~paste('</br> Cell: ', Cell,
+                                      '</br> Clusters: ', Clusters,
+                                      '</br> Samples: ', Sample,
+                                      '</br> CellType: ', cellType)) %>% layout(legend= list(font=list(size=8))) %>%
+                add_trace(x=~V1,y=~V2) %>%
+                layout(title = 'tSNE with GraphClusters',showlegend = TRUE, legend = list(font = list(size = 10), itemsizing='constant'))
+
+        
     })
     
     
+    ####################################
+    #
+    # Testing Clustering
+    #
+    ####################################
+    
+    output$testing <- renderPlotly({
+        
+        #plot(LouvainGraph,graphToCL)
+        
+        df <- as.data.frame()
+        #df <- as.data.frame(newGraph)
+        df[,'Cell']=as.factor(colData(cdScFiltAnnot)$Barcode)
+        df[,'Sample']=as.factor(colData(cdScFiltAnnot)$Sample)
+        df[,'Clusters'] <- as.factor(LouvainGraph$membership)
+        df[,'cellType'] <- as.factor(colData(cdScFiltAnnot)$cellType)
+        df %>%
+            #filter(Clusters %in% input$checkboxProjectionCluster) %>%
+            #filter(Sample %in% input$checkboxProjectionSample) %>%
+            #filter(cellType %in% input$checkboxProjectionCellType) %>%
+            plot_ly(color = ~Clusters, colors = c_clust_col[c(1:9)], type="scatter", mode="markers", hoverinfo = 'text',
+                    #marker = list(size = input$plotOverviewDotSize, opacity = input$plotOverviewDotOpacity),
+                    text = ~paste('</br> Cell: ', Cell,
+                                  '</br> Clusters: ', Clusters,
+                                  '</br> Samples: ', Sample,
+                                  '</br> CellType: ', cellType)) %>% layout(legend= list(font=list(size=8))) %>%
+            add_trace(x=~V1,y=~V2) %>%
+            layout(title = 'tSNE with GraphClusters',showlegend = TRUE, legend = list(font = list(size = 10), itemsizing='constant'))
+        
+        
+    })
+
 }
 
 shinyApp(ui, server)
